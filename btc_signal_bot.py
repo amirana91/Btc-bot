@@ -3,8 +3,11 @@ import time
 from datetime import datetime
 
 # === НАСТРОЙКИ ===
-TELEGRAM_TOKEN = "ТВОЙ_ТОКЕН"
-CHAT_ID = "ТВОЙ_CHAT_ID"
+TELEGRAM_TOKEN = "8633747198:AAGnMpqoX8TiX8ljbFAmfBF3YBE9YEKWWHI"
+CHAT_ID = "6825257186"
+OTT_PERIOD = 7
+OTT_PERCENT = 1.4
+CHECK_INTERVAL = 60 * 5  # проверка каждые 5 минут
 
 OTT_PERIOD = 7
 OTT_PERCENT = 1.4
