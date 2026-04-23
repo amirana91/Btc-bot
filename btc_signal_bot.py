@@ -9,7 +9,6 @@ OTT_PERIOD = 7
 OTT_PERCENT = 1.4
 CHECK_INTERVAL = 60 * 5 
 
-# === СПИСОК ПАР ===
 SYMBOLS = ["BTCUSDT", "ZILUSDT", "GMTUSDT", "RUNEUSDT", "XRPUSDT", "LTCUSDT"]
 
 def send_telegram(message):
@@ -21,19 +20,82 @@ def send_telegram(message):
         print(f"Ошибка ТГ: {e}")
 
 def get_candles(symbol):
-    # Используем Bybit V5 API (Linear Futures)
+    # ПЕРЕКЛЮЧЕНО НА BYBIT (ОНИ НЕ БЛОКИРУЮТ)
     url = "https://api.bybit.com/v5/market/kline"
-    params = {
-        "category": "linear",
-        "symbol": symbol,
-        "interval": "60", 
-        "limit": 200
-    }
+    params = {"category": "linear", "symbol": symbol, "interval": "60", "limit": 200}
     try:
         r = requests.get(url, params=params, timeout=10)
         res = r.json()
         if res.get("retCode") == 0:
-            # Bybit присылает данные от новых к старым, разворачиваем их
+            list_candles = list(reversed(res["result"]["list"]))
+            closes = [float(c[4]) for c in list_candles]
+            timestamps = [int(c[0]) for c in list_candles]
+            return closes, timestamps
+        return None, None
+    except Exception:
+        return None, None
+
+def wwma(prices, period):
+    if len(prices) < period: return [None] * len(prices)
+    res = [None] * len(prices)
+    res[period - 1] = sum(prices[:period]) / period
+    alpha = 1.0 / period
+    for i in range(period, len(prices)):
+        res[i] = prices[i] * alpha + res[i-1] * (1 - alpha)
+    return res
+
+def calculate_ott(closes, period, percent):
+    ma = wwma(closes, period)
+    support = [None] * len(closes)
+    valid_start = period - 1
+    for i in range(valid_start, len(closes)):
+        if ma[i] is None: continue
+        fark = ma[i] * percent * 0.01
+        longstop, shortstop = ma[i] - fark, ma[i] + fark
+        if i == valid_start: support[i] = longstop
+        else:
+            if ma[i] > support[i-1]: support[i] = max(longstop, support[i-1])
+            else: support[i] = min(shortstop, support[i-1])
+    return ma, support
+
+def main():
+    print("🤖 Бот запущен (Bybit Mode)")
+    send_telegram("🤖 <b>Бот запущен на Bybit!</b>\nСвязь налажена.")
+    last_signals = {s: (None, None) for s in SYMBOLS}
+    
+    while True:
+        now = datetime.now().strftime("%H:%M")
+        for symbol in SYMBOLS:
+            closes, tms = get_candles(symbol)
+            if not closes:
+                print(f"[{now}] {symbol}: Ошибка связи с биржей")
+                continue
+            
+            ma, support = calculate_ott(closes, OTT_PERIOD, OTT_PERCENT)
+            
+            # Проверка последнего сигнала
+            for i in range(len(closes)-1, len(closes)-6, -1):
+                if ma[i-1] <= support[i-1] and ma[i] > support[i]:
+                    signal, idx = "BUY", i
+                    break
+                if ma[i-1] >= support[i-1] and ma[i] < support[i]:
+                    signal, idx = "SELL", i
+                    break
+            else: signal = None
+
+            print(f"[{now}] {symbol}: OK (Price: {closes[-1]})")
+
+            if signal:
+                s_ts = tms[idx]
+                if signal != last_signals[symbol][0] or s_ts != last_signals[symbol][1]:
+                    emoji = "🟢" if signal == "BUY" else "🔴"
+                    send_telegram(f"{emoji} <b>{signal} {symbol}</b>\nЦена: {closes[-1]}")
+                    last_signals[symbol] = (signal, s_ts)
+        
+        time.sleep(CHECK_INTERVAL)
+
+if __name__ == "__main__":
+    main()
             list_candles = list(reversed(res["result"]["list"]))
             closes = [float(c[4]) for c in list_candles]
             timestamps = [int(c[0]) for c in list_candles]
