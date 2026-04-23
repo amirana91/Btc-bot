@@ -38,58 +38,61 @@ def get_candles(symbol):
         print(f"Ошибка получения данных Binance для {symbol}: {e}")
         return None, None
 
-def ema(prices, period):
+def wwma(prices, period):
     if len(prices) < period:
         return [None] * len(prices)
     result = [None] * len(prices)
-    k = 2 / (period + 1)
+    # Начальное значение - простая средняя
     result[period - 1] = sum(prices[:period]) / period
+    alpha = 1.0 / period
     for i in range(period, len(prices)):
-        result[i] = prices[i] * k + result[i-1] * (1 - k)
+        result[i] = prices[i] * alpha + result[i-1] * (1 - alpha)
     return result
 
 def calculate_ott(closes, period, percent):
-    # 1. Сначала считаем MA (центральную линию)
-    ma = ema(closes, period)
+    # 1. Считаем центральную линию по методу WWMA
+    ma = wwma(closes, period)
     
-    # 2. Считаем Support (линию OTT)
     support = [None] * len(closes)
     valid_start = period - 1
     
     for i in range(valid_start, len(closes)):
         if ma[i] is None: continue
         
-        # В OTT поддержка считается от MA, а не от цены напрямую
-        longstop = ma[i] * (1 - percent / 100)
-        shortstop = ma[i] * (1 + percent / 100)
+        # Коэффициент смещения (fark в Pine Script)
+        fark = ma[i] * percent * 0.01
+        
+        longstop = ma[i] - fark
+        shortstop = ma[i] + fark
         
         if i == valid_start:
             support[i] = longstop
         else:
-            # Логика смещения линии (Trailing)
+            # Математика OTT: если средняя выше предыдущей поддержки, 
+            # мы подтягиваем поддержку вверх (longstop). 
+            # Если ниже - используем верхнюю границу (shortstop).
             if ma[i] > support[i-1]:
-                # Если тренд вверх, линия поддержки может только расти
                 support[i] = max(longstop, support[i-1])
             else:
-                # Если тренд вниз, линия сопротивления может только падать
                 support[i] = min(shortstop, support[i-1])
     return ma, support
 
 def get_current_signal(closes, ma, support):
-    # Проверяем последние 5 свечей, чтобы точно зацепить сигнал
-    for i in range(len(closes) - 1, len(closes) - 6, -1):
-        if i < 1 or ma[i] is None or ma[i-1] is None or support[i] is None:
+    # Проверяем последние 3 свечи (чтобы поймать пересечение)
+    for i in range(len(closes) - 1, len(closes) - 4, -1):
+        if i < 1 or ma[i] is None or support[i] is None or support[i-1] is None:
             continue
             
-        # Сигнал SELL: MA стала меньше Support
+        # SELL: MA ушла под Support
         if ma[i-1] >= support[i-1] and ma[i] < support[i]:
             return "SELL", i
             
-        # Сигнал BUY: MA стала больше Support
+        # BUY: MA вышла над Support
         if ma[i-1] <= support[i-1] and ma[i] > support[i]:
             return "BUY", i
             
     return None, None
+
 
 
 
