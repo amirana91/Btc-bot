@@ -49,43 +49,48 @@ def ema(prices, period):
     return result
 
 def calculate_ott(closes, period, percent):
-    # Используем EMA, так как она ближе к поведению индикатора в TradingView
+    # 1. Сначала считаем MA (центральную линию)
     ma = ema(closes, period)
-    valid_start = period - 1
+    
+    # 2. Считаем Support (линию OTT)
     support = [None] * len(closes)
+    valid_start = period - 1
     
     for i in range(valid_start, len(closes)):
         if ma[i] is None: continue
         
-        # Рассчитываем верхний и нижний пороги
+        # В OTT поддержка считается от MA, а не от цены напрямую
         longstop = ma[i] * (1 - percent / 100)
         shortstop = ma[i] * (1 + percent / 100)
         
         if i == valid_start:
-            support[i] = longstop if closes[i] >= ma[i] else shortstop
+            support[i] = longstop
         else:
-            # Логика трейлинг-стопа (как в оригинальном OTT)
+            # Логика смещения линии (Trailing)
             if ma[i] > support[i-1]:
+                # Если тренд вверх, линия поддержки может только расти
                 support[i] = max(longstop, support[i-1])
             else:
+                # Если тренд вниз, линия сопротивления может только падать
                 support[i] = min(shortstop, support[i-1])
     return ma, support
 
 def get_current_signal(closes, ma, support):
-    # Проверяем последние 2 свечи на предмет пересечения
-    i = len(closes) - 1
-    if i < 1 or ma[i] is None or ma[i-1] is None or support[i] is None or support[i-1] is None:
-        return None, None
-
-    # SELL: MA пересекла Support сверху вниз
-    if ma[i-1] >= support[i-1] and ma[i] < support[i]:
-        return "SELL", i
-    
-    # BUY: MA пересекла Support снизу вверх
-    if ma[i-1] <= support[i-1] and ma[i] > support[i]:
-        return "BUY", i
-        
+    # Проверяем последние 5 свечей, чтобы точно зацепить сигнал
+    for i in range(len(closes) - 1, len(closes) - 6, -1):
+        if i < 1 or ma[i] is None or ma[i-1] is None or support[i] is None:
+            continue
+            
+        # Сигнал SELL: MA стала меньше Support
+        if ma[i-1] >= support[i-1] and ma[i] < support[i]:
+            return "SELL", i
+            
+        # Сигнал BUY: MA стала больше Support
+        if ma[i-1] <= support[i-1] and ma[i] > support[i]:
+            return "BUY", i
+            
     return None, None
+
 
 
 def main():
