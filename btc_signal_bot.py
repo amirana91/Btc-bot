@@ -34,10 +34,11 @@ def get_candles(symbol):
         r = requests.get(url, params=params)
         data = r.json()
         closes = [float(c[4]) for c in data]
-        return closes
+        timestamps = [int(c[0]) for c in data]
+        return closes, timestamps
     except Exception as e:
         print(f"Ошибка получения данных {symbol}: {e}")
-        return None
+        return None, None
 
 def wwma(prices, period):
     result = [None] * len(prices)
@@ -69,17 +70,21 @@ def calculate_ott(closes, period, percent):
 
     return ma, support
 
-def check_signal(closes, ma, support):
-    i = len(closes) - 2
-    if support[i] is None or support[i-1] is None:
-        return None
-    if ma[i] is None or ma[i-1] is None:
-        return None
-    if ma[i-1] < support[i-1] and ma[i] > support[i]:
-        return "BUY"
-    if ma[i-1] > support[i-1] and ma[i] < support[i]:
-        return "SELL"
-    return None
+def get_current_signal(closes, ma, support):
+    """Возвращает текущий активный сигнал (последнее пересечение)"""
+    # Ищем последнее пересечение в последних 10 свечах
+    for i in range(len(closes) - 2, len(closes) - 12, -1):
+        if i < 1:
+            break
+        if support[i] is None or support[i-1] is None:
+            continue
+        if ma[i] is None or ma[i-1] is None:
+            continue
+        if ma[i-1] < support[i-1] and ma[i] > support[i]:
+            return "BUY", i
+        if ma[i-1] > support[i-1] and ma[i] < support[i]:
+            return "SELL", i
+    return None, None
 
 def main():
     print("🤖 Бот запущен!")
@@ -90,51 +95,75 @@ def main():
         "Таймфрейм: 1H | OTT (7, 1.4)\n\nЖду сигналов... 👀"
     )
 
-    last_signals = {symbol: None for symbol in SYMBOLS}
+    # Храним: symbol -> (signal, timestamp свечи сигнала)
+    last_signals = {symbol: (None, None) for symbol in SYMBOLS}
+
+    # При старте сначала проверяем текущие сигналы
+    first_run = True
 
     while True:
         now = datetime.now().strftime("%H:%M %d.%m.%Y")
         for symbol in SYMBOLS:
             try:
-                closes = get_candles(symbol)
+                closes, timestamps = get_candles(symbol)
                 if closes is None:
                     continue
 
                 ma, support = calculate_ott(closes, OTT_PERIOD, OTT_PERCENT)
-                signal = check_signal(closes, ma, support)
+                signal, signal_idx = get_current_signal(closes, ma, support)
                 current_price = closes[-1]
 
                 print(f"[{now}] {symbol}: {current_price:.4f} | Сигнал: {signal}")
 
-                if signal and signal != last_signals[symbol]:
-                    pair_name = symbol.replace("USDT", "/USDT")
-                    if signal == "BUY":
-                        msg = (
-                            f"🟢 <b>СИГНАЛ: LONG (BUY)</b>\n\n"
-                            f"📊 Пара: {pair_name}\n"
-                            f"💰 Цена: <b>{current_price:.4f}$</b>\n"
-                            f"⏰ Время: {now}\n"
-                            f"📈 OTT: MA ↑ Support\n\n"
-                            f"⚠️ Не забудь стоп-лосс!"
-                        )
-                    else:
-                        msg = (
-                            f"🔴 <b>СИГНАЛ: SHORT (SELL)</b>\n\n"
-                            f"📊 Пара: {pair_name}\n"
-                            f"💰 Цена: <b>{current_price:.4f}$</b>\n"
-                            f"⏰ Время: {now}\n"
-                            f"📉 OTT: MA ↓ Support\n\n"
-                            f"⚠️ Не забудь стоп-лосс!"
-                        )
-                    send_telegram(msg)
-                    last_signals[symbol] = signal
-                    print(f"✅ Сигнал отправлен: {symbol} {signal}")
+                if signal is not None:
+                    signal_ts = timestamps[signal_idx] if signal_idx is not None else None
+                    last_signal, last_ts = last_signals[symbol]
+
+                    # Отправляем если: новый сигнал ИЛИ другая свеча сигнала
+                    should_send = False
+                    if last_signal != signal:
+                        should_send = True
+                    elif last_ts != signal_ts:
+                        should_send = True
+
+                    # При первом запуске отправляем текущий сигнал
+                    if first_run and last_signal is None:
+                        should_send = True
+
+                    if should_send:
+                        pair_name = symbol.replace("USDT", "/USDT")
+                        candle_time = datetime.fromtimestamp(signal_ts / 1000).strftime("%H:%M %d.%m") if signal_ts else "—"
+
+                        if signal == "BUY":
+                            msg = (
+                                f"🟢 <b>СИГНАЛ: LONG (BUY)</b>\n\n"
+                                f"📊 Пара: {pair_name}\n"
+                                f"💰 Цена: <b>{current_price:.4f}$</b>\n"
+                                f"🕯 Свеча сигнала: {candle_time}\n"
+                                f"⏰ Сейчас: {now}\n"
+                                f"📈 OTT: MA ↑ Support\n\n"
+                                f"⚠️ Не забудь стоп-лосс!"
+                            )
+                        else:
+                            msg = (
+                                f"🔴 <b>СИГНАЛ: SHORT (SELL)</b>\n\n"
+                                f"📊 Пара: {pair_name}\n"
+                                f"💰 Цена: <b>{current_price:.4f}$</b>\n"
+                                f"🕯 Свеча сигнала: {candle_time}\n"
+                                f"⏰ Сейчас: {now}\n"
+                                f"📉 OTT: MA ↓ Support\n\n"
+                                f"⚠️ Не забудь стоп-лосс!"
+                            )
+                        send_telegram(msg)
+                        last_signals[symbol] = (signal, signal_ts)
+                        print(f"✅ Сигнал отправлен: {symbol} {signal}")
 
                 time.sleep(2)
 
             except Exception as e:
                 print(f"Ошибка {symbol}: {e}")
 
+        first_run = False
         time.sleep(CHECK_INTERVAL)
 
 if __name__ == "__main__":
