@@ -7,17 +7,10 @@ TELEGRAM_TOKEN = "8633747198:AAGnMpqoX8TiX8ljbFAmfBF3YBE9YEKWWHI"
 CHAT_ID = "6825257186"
 OTT_PERIOD = 7
 OTT_PERCENT = 1.4
-CHECK_INTERVAL = 60 * 5  # проверка каждые 5 минут
+CHECK_INTERVAL = 60 * 5 
 
 # === СПИСОК ПАР ===
-SYMBOLS = [
-    "BTCUSDT",
-    "ZILUSDT",
-    "GMTUSDT",
-    "RUNEUSDT",
-    "XRPUSDT",
-    "LTCUSDT",
-]
+SYMBOLS = ["BTCUSDT", "ZILUSDT", "GMTUSDT", "RUNEUSDT", "XRPUSDT", "LTCUSDT"]
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -25,151 +18,112 @@ def send_telegram(message):
     try:
         requests.post(url, data=data, timeout=10)
     except Exception as e:
-        print(f"Ошибка отправки: {e}")
+        print(f"Ошибка ТГ: {e}")
 
 def get_candles(symbol):
-    # Bybit API (работает везде)
+    # Используем Bybit V5 API (Linear Futures)
     url = "https://api.bybit.com/v5/market/kline"
     params = {
         "category": "linear",
         "symbol": symbol,
-        "interval": "60",  # 60 минут = 1H
-        "limit": 100
+        "interval": "60", 
+        "limit": 200
     }
     try:
         r = requests.get(url, params=params, timeout=10)
-        data = r.json()
-        if data.get("retCode") == 0:
-            candles = data["result"]["list"]
-            # Bybit возвращает от новых к старым, разворачиваем
-            candles = list(reversed(candles))
-            closes = [float(c[4]) for c in candles]
-            timestamps = [int(c[0]) for c in candles]
-            print(f"✅ {symbol} данные получены с Bybit")
+        res = r.json()
+        if res.get("retCode") == 0:
+            # Bybit присылает данные от новых к старым, разворачиваем их
+            list_candles = list(reversed(res["result"]["list"]))
+            closes = [float(c[4]) for c in list_candles]
+            timestamps = [int(c[0]) for c in list_candles]
             return closes, timestamps
         else:
-            print(f"❌ Bybit ошибка {symbol}: {data}")
+            print(f"❌ Bybit Error {symbol}: {res.get('retMsg')}")
             return None, None
     except Exception as e:
-        print(f"❌ Ошибка {symbol}: {e}")
+        print(f"❌ Ошибка сети {symbol}: {e}")
         return None, None
 
 def wwma(prices, period):
+    if len(prices) < period: return [None] * len(prices)
     result = [None] * len(prices)
     result[period - 1] = sum(prices[:period]) / period
-    k = 1.0 / period
+    alpha = 1.0 / period
     for i in range(period, len(prices)):
-        result[i] = prices[i] * k + result[i-1] * (1 - k)
+        result[i] = prices[i] * alpha + result[i-1] * (1 - alpha)
     return result
 
 def calculate_ott(closes, period, percent):
     ma = wwma(closes, period)
-    valid_start = period - 1
     support = [None] * len(closes)
-
+    valid_start = period - 1
+    
     for i in range(valid_start, len(closes)):
-        if ma[i] is None:
-            continue
-        longstop = ma[i] * (1 - percent / 100)
-        shortstop = ma[i] * (1 + percent / 100)
-        if closes[i] >= ma[i]:
+        if ma[i] is None: continue
+        
+        fark = ma[i] * percent * 0.01
+        longstop = ma[i] - fark
+        shortstop = ma[i] + fark
+        
+        if i == valid_start:
             support[i] = longstop
         else:
-            support[i] = shortstop
-        if i > valid_start and support[i-1] is not None:
-            if closes[i] > support[i-1]:
-                support[i] = max(support[i], support[i-1])
+            # Математика OTT (Trailing Stop на основе MA)
+            if ma[i] > support[i-1]:
+                support[i] = max(longstop, support[i-1])
             else:
-                support[i] = min(support[i], support[i-1])
-
+                support[i] = min(shortstop, support[i-1])
     return ma, support
 
 def get_current_signal(closes, ma, support):
-    for i in range(len(closes) - 2, len(closes) - 12, -1):
-        if i < 1:
-            break
-        if support[i] is None or support[i-1] is None:
+    # Проверяем последние 5 свечей
+    for i in range(len(closes) - 1, len(closes) - 6, -1):
+        if i < 1 or ma[i] is None or ma[i-1] is None or support[i] is None or support[i-1] is None:
             continue
-        if ma[i] is None or ma[i-1] is None:
-            continue
-        if ma[i-1] < support[i-1] and ma[i] > support[i]:
-            return "BUY", i
-        if ma[i-1] > support[i-1] and ma[i] < support[i]:
+            
+        if ma[i-1] >= support[i-1] and ma[i] < support[i]:
             return "SELL", i
+        if ma[i-1] <= support[i-1] and ma[i] > support[i]:
+            return "BUY", i
+            
     return None, None
 
 def main():
-    print("🤖 Бот запущен!")
-    send_telegram(
-        "🤖 <b>Бот запущен!</b>\n\n"
-        "Мониторинг пар:\n"
-        "• BTC/USDT\n• ZIL/USDT\n• GMT/USDT\n• RUNE/USDT\n• XRP/USDT\n• LTC/USDT\n\n"
-        "Таймфрейм: 1H | OTT (7, 1.4)\n\nЖду сигналов... 👀"
-    )
-
+    print("🤖 Бот запущен (Bybit API)")
+    send_telegram("🤖 <b>Бот запущен на Bybit!</b>\nМониторинг 1H | OTT (7, 1.4)")
+    
     last_signals = {symbol: (None, None) for symbol in SYMBOLS}
-    first_run = True
-
+    
     while True:
-        now = datetime.now().strftime("%H:%M %d.%m.%Y")
+        now_str = datetime.now().strftime("%H:%M %d.%m.%Y")
         for symbol in SYMBOLS:
             try:
                 closes, timestamps = get_candles(symbol)
-                if closes is None:
-                    continue
-
+                if not closes: continue
+                
                 ma, support = calculate_ott(closes, OTT_PERIOD, OTT_PERCENT)
                 signal, signal_idx = get_current_signal(closes, ma, support)
-                current_price = closes[-1]
+                
+                # Показываем в логах Railway, что бот живой
+                diff = ma[-1] - support[-1]
+                print(f"[{now_str}] {symbol}: {closes[-1]} | Diff: {diff:.2f} | Signal: {signal}")
 
-                print(f"[{now}] {symbol}: {current_price:.4f} | Сигнал: {signal}")
-
-                if signal is not None:
-                    signal_ts = timestamps[signal_idx] if signal_idx is not None else None
-                    last_signal, last_ts = last_signals[symbol]
-
-                    should_send = False
-                    if last_signal != signal:
-                        should_send = True
-                    elif last_ts != signal_ts:
-                        should_send = True
-                    if first_run and last_signal is None:
-                        should_send = True
-
-                    if should_send:
-                        pair_name = symbol.replace("USDT", "/USDT")
-                        candle_time = datetime.fromtimestamp(signal_ts / 1000).strftime("%H:%M %d.%m") if signal_ts else "—"
-
-                        if signal == "BUY":
-                            msg = (
-                                f"🟢 <b>СИГНАЛ: LONG (BUY)</b>\n\n"
-                                f"📊 Пара: {pair_name}\n"
-                                f"💰 Цена: <b>{current_price:.4f}$</b>\n"
-                                f"🕯 Свеча сигнала: {candle_time}\n"
-                                f"⏰ Сейчас: {now}\n"
-                                f"📈 OTT: MA ↑ Support\n\n"
-                                f"⚠️ Не забудь стоп-лосс!"
-                            )
-                        else:
-                            msg = (
-                                f"🔴 <b>СИГНАЛ: SHORT (SELL)</b>\n\n"
-                                f"📊 Пара: {pair_name}\n"
-                                f"💰 Цена: <b>{current_price:.4f}$</b>\n"
-                                f"🕯 Свеча сигнала: {candle_time}\n"
-                                f"⏰ Сейчас: {now}\n"
-                                f"📉 OTT: MA ↓ Support\n\n"
-                                f"⚠️ Не забудь стоп-лосс!"
-                            )
+                if signal:
+                    signal_ts = timestamps[signal_idx]
+                    last_s, last_ts = last_signals[symbol]
+                    
+                    if signal != last_s or signal_ts != last_ts:
+                        pair = symbol.replace("USDT", "/USDT")
+                        emoji = "🟢" if signal == "BUY" else "🔴"
+                        msg = f"{emoji} <b>СИГНАЛ: {signal}</b>\n\n📊 Пара: {pair}\n💰 Цена: {closes[-1]}"
                         send_telegram(msg)
                         last_signals[symbol] = (signal, signal_ts)
-                        print(f"✅ Сигнал отправлен: {symbol} {signal}")
-
-                time.sleep(2)
-
+                
+                time.sleep(1) 
             except Exception as e:
                 print(f"Ошибка {symbol}: {e}")
-
-        first_run = False
+        
         time.sleep(CHECK_INTERVAL)
 
 if __name__ == "__main__":
