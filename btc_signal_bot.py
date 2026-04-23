@@ -38,54 +38,55 @@ def get_candles(symbol):
         print(f"Ошибка получения данных Binance для {symbol}: {e}")
         return None, None
 
-def wwma(prices, period):
+def ema(prices, period):
     if len(prices) < period:
         return [None] * len(prices)
     result = [None] * len(prices)
+    k = 2 / (period + 1)
     result[period - 1] = sum(prices[:period]) / period
-    k = 1.0 / period
     for i in range(period, len(prices)):
-        if result[i-1] is not None:
-            result[i] = prices[i] * k + result[i-1] * (1 - k)
+        result[i] = prices[i] * k + result[i-1] * (1 - k)
     return result
 
 def calculate_ott(closes, period, percent):
-    ma = wwma(closes, period)
+    # Используем EMA, так как она ближе к поведению индикатора в TradingView
+    ma = ema(closes, period)
     valid_start = period - 1
     support = [None] * len(closes)
     
     for i in range(valid_start, len(closes)):
-        if ma[i] is None:
-            continue
+        if ma[i] is None: continue
         
+        # Рассчитываем верхний и нижний пороги
         longstop = ma[i] * (1 - percent / 100)
         shortstop = ma[i] * (1 + percent / 100)
         
-        if closes[i] >= ma[i]:
-            support[i] = longstop
+        if i == valid_start:
+            support[i] = longstop if closes[i] >= ma[i] else shortstop
         else:
-            support[i] = shortstop
-            
-        if i > valid_start and support[i-1] is not None:
-            if closes[i] > support[i-1]:
-                support[i] = max(support[i], support[i-1])
+            # Логика трейлинг-стопа (как в оригинальном OTT)
+            if ma[i] > support[i-1]:
+                support[i] = max(longstop, support[i-1])
             else:
-                support[i] = min(support[i], support[i-1])
+                support[i] = min(shortstop, support[i-1])
     return ma, support
 
 def get_current_signal(closes, ma, support):
-    # Проверяем последние 10 свечей на наличие пересечения
-    for i in range(len(closes) - 1, len(closes) - 11, -1):
-        if i < 1 or ma[i] is None or ma[i-1] is None or support[i] is None or support[i-1] is None:
-            continue
-            
-        # Пересечение снизу вверх
-        if ma[i-1] <= support[i-1] and ma[i] > support[i]:
-            return "BUY", i
-        # Пересечение сверху вниз
-        if ma[i-1] >= support[i-1] and ma[i] < support[i]:
-            return "SELL", i
+    # Проверяем последние 2 свечи на предмет пересечения
+    i = len(closes) - 1
+    if i < 1 or ma[i] is None or ma[i-1] is None or support[i] is None or support[i-1] is None:
+        return None, None
+
+    # SELL: MA пересекла Support сверху вниз
+    if ma[i-1] >= support[i-1] and ma[i] < support[i]:
+        return "SELL", i
+    
+    # BUY: MA пересекла Support снизу вверх
+    if ma[i-1] <= support[i-1] and ma[i] > support[i]:
+        return "BUY", i
+        
     return None, None
+
 
 def main():
     print("🤖 Бот запущен!")
