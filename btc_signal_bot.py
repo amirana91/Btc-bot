@@ -25,7 +25,7 @@ def send_telegram(message):
         print(f"Ошибка отправки в Telegram: {e}")
 
 def get_candles(symbol):
-    url = "https://api.binance.com/api/v3/klines"
+    url = "https://fapi.binance.com/fapi/v1/klines"
     params = {"symbol": symbol, "interval": "1h", "limit": 100}
     try:
         r = requests.get(url, params=params, timeout=10)
@@ -42,7 +42,6 @@ def wwma(prices, period):
     if len(prices) < period:
         return [None] * len(prices)
     result = [None] * len(prices)
-    # Начальное значение - простая средняя
     result[period - 1] = sum(prices[:period]) / period
     alpha = 1.0 / period
     for i in range(period, len(prices)):
@@ -50,48 +49,38 @@ def wwma(prices, period):
     return result
 
 def calculate_ott(closes, period, percent):
-    # 1. Считаем центральную линию по методу WWMA
     ma = wwma(closes, period)
-    
     support = [None] * len(closes)
     valid_start = period - 1
-    
     for i in range(valid_start, len(closes)):
         if ma[i] is None: continue
-        
-        # Коэффициент смещения (fark в Pine Script)
         fark = ma[i] * percent * 0.01
-        
         longstop = ma[i] - fark
         shortstop = ma[i] + fark
-        
         if i == valid_start:
             support[i] = longstop
         else:
-            # Математика OTT: если средняя выше предыдущей поддержки, 
-            # мы подтягиваем поддержку вверх (longstop). 
-            # Если ниже - используем верхнюю границу (shortstop).
             if ma[i] > support[i-1]:
                 support[i] = max(longstop, support[i-1])
             else:
                 support[i] = min(shortstop, support[i-1])
     return ma, support
 
+
 def get_current_signal(closes, ma, support):
-    # Проверяем последние 3 свечи (чтобы поймать пересечение)
+def get_current_signal(closes, ma, support):
+    # Проверяем последние 3 свечи
     for i in range(len(closes) - 1, len(closes) - 4, -1):
         if i < 1 or ma[i] is None or support[i] is None or support[i-1] is None:
             continue
-            
         # SELL: MA ушла под Support
         if ma[i-1] >= support[i-1] and ma[i] < support[i]:
             return "SELL", i
-            
         # BUY: MA вышла над Support
         if ma[i-1] <= support[i-1] and ma[i] > support[i]:
             return "BUY", i
-            
     return None, None
+
 
 
 
@@ -155,4 +144,9 @@ def main():
         time.sleep(CHECK_INTERVAL)
 
 if __name__ == "__main__":
-    main()
+    main(                ma, support = calculate_ott(closes, OTT_PERIOD, OTT_PERCENT)
+                signal, signal_idx = get_current_signal(closes, ma, support)
+                
+                # ДОБАВЬ ЭТУ СТРОКУ:
+                print(f"[{now}] {symbol} | Цена: {closes[-1]} | MA: {ma[-1]:.2f} | OTT: {support[-1]:.2f} | Diff: {ma[-1] - support[-1]:.2f}")
+)
