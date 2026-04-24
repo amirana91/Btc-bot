@@ -31,7 +31,7 @@ def get_candles(symbol):
         "category": "linear",
         "symbol": symbol,
         "interval": "60",
-        "limit": 100
+        "limit": 150
     }
     try:
         r = requests.get(url, params=params, timeout=10)
@@ -40,7 +40,7 @@ def get_candles(symbol):
             candles = list(reversed(data["result"]["list"]))
             closes = [float(c[4]) for c in candles]
             timestamps = [int(c[0]) for c in candles]
-            print(f"OK {symbol}: {closes[-1]:.4f}")
+            print(f"OK {symbol}: {closes[-1]:.6f}")
             return closes, timestamps
         else:
             print(f"Bybit error {symbol}: {data}")
@@ -49,40 +49,92 @@ def get_candles(symbol):
         print(f"Error {symbol}: {e}")
         return None, None
 
-def wwma(prices, period):
-    result = [None] * len(prices)
-    result[period - 1] = sum(prices[:period]) / period
-    k = 1.0 / period
-    for i in range(period, len(prices)):
-        result[i] = prices[i] * k + result[i-1] * (1 - k)
-    return result
+def wwma(src, length):
+    """Точная формула WWMA из Pine Script"""
+    wwalpha = 1.0 / length
+    WWMA = [0.0] * len(src)
+    WWMA[0] = src[0]
+    for i in range(1, len(src)):
+        WWMA[i] = wwalpha * src[i] + (1 - wwalpha) * WWMA[i-1]
+    return WWMA
 
-def calculate_ott(closes, period, percent):
-    ma = wwma(closes, period)
-    support = [None] * len(closes)
-    for i in range(period - 1, len(closes)):
-        if ma[i] is None:
-            continue
-        ls = ma[i] * (1 - percent / 100)
-        ss = ma[i] * (1 + percent / 100)
-        support[i] = ls if closes[i] >= ma[i] else ss
-        if i > period - 1 and support[i-1] is not None:
-            if closes[i] > support[i-1]:
-                support[i] = max(support[i], support[i-1])
-            else:
-                support[i] = min(support[i], support[i-1])
-    return ma, support
+def calculate_ott(closes, length, percent):
+    """
+    Точная реализация OTT индикатора по исходному Pine Script коду
+    Сигнал: crossover/crossunder MAvg и OTT[2]
+    """
+    n = len(closes)
+    
+    # WWMA (Moving Average)
+    MAvg = wwma(closes, length)
+    
+    fark = [MAvg[i] * percent * 0.01 for i in range(n)]
+    
+    # longStop
+    longStop = [MAvg[i] - fark[i] for i in range(n)]
+    for i in range(1, n):
+        longStopPrev = longStop[i-1]
+        if MAvg[i] > longStopPrev:
+            longStop[i] = max(longStop[i], longStopPrev)
+    
+    # shortStop
+    shortStop = [MAvg[i] + fark[i] for i in range(n)]
+    for i in range(1, n):
+        shortStopPrev = shortStop[i-1]
+        if MAvg[i] < shortStopPrev:
+            shortStop[i] = min(shortStop[i], shortStopPrev)
+    
+    # dir
+    dir_ = [1] * n
+    for i in range(1, n):
+        prev_dir = dir_[i-1]
+        if prev_dir == -1 and MAvg[i] > shortStop[i-1]:
+            dir_[i] = 1
+        elif prev_dir == 1 and MAvg[i] < longStop[i-1]:
+            dir_[i] = -1
+        else:
+            dir_[i] = prev_dir
+    
+    # MT
+    MT = [longStop[i] if dir_[i] == 1 else shortStop[i] for i in range(n)]
+    
+    # OTT
+    OTT = []
+    for i in range(n):
+        if MAvg[i] > MT[i]:
+            OTT.append(MT[i] * (200 + percent) / 200)
+        else:
+            OTT.append(MT[i] * (200 - percent) / 200)
+    
+    return MAvg, OTT
 
-def get_signal(closes, ma, support):
-    for i in range(len(closes) - 2, len(closes) - 12, -1):
-        if i < 1:
+def get_signal(MAvg, OTT):
+    """
+    Сигнал точно как в Pine Script:
+    buySignalk = crossover(MAvg, OTT[2])  -> MAvg пересекает OTT снизу вверх (2 бара назад)
+    sellSignallk = crossunder(MAvg, OTT[2]) -> MAvg пересекает OTT сверху вниз (2 бара назад)
+    """
+    n = len(MAvg)
+    
+    # Проверяем последние 5 свечей
+    for i in range(n - 2, n - 7, -1):
+        if i < 3:
             break
-        if None in (support[i], support[i-1], ma[i], ma[i-1]):
-            continue
-        if ma[i-1] < support[i-1] and ma[i] > support[i]:
+        
+        # OTT[2] означает OTT со сдвигом 2 бара назад
+        ott2_curr = OTT[i - 2]
+        ott2_prev = OTT[i - 3]
+        mavg_curr = MAvg[i]
+        mavg_prev = MAvg[i - 1]
+        
+        # crossover: предыдущий MAvg <= OTT[2], текущий MAvg > OTT[2]
+        if mavg_prev <= ott2_prev and mavg_curr > ott2_curr:
             return "BUY", i
-        if ma[i-1] > support[i-1] and ma[i] < support[i]:
+        
+        # crossunder: предыдущий MAvg >= OTT[2], текущий MAvg < OTT[2]
+        if mavg_prev >= ott2_prev and mavg_curr < ott2_curr:
             return "SELL", i
+    
     return None, None
 
 def main():
@@ -91,7 +143,7 @@ def main():
         "🤖 <b>Бот запущен!</b>\n\n"
         "Мониторинг пар:\n"
         "• BTC/USDT\n• ZIL/USDT\n• GMT/USDT\n• RUNE/USDT\n• XRP/USDT\n• LTC/USDT\n\n"
-        "Таймфрейм: 1H | OTT (7, 1.4)\n\nЖду сигналов... 👀"
+        "Таймфрейм: 1H | OTT (7, 1.4, WWMA)\n\nЖду сигналов... 👀"
     )
 
     last_signals = {s: (None, None) for s in SYMBOLS}
@@ -105,9 +157,11 @@ def main():
                 if not closes:
                     continue
 
-                ma, support = calculate_ott(closes, OTT_PERIOD, OTT_PERCENT)
-                signal, idx = get_signal(closes, ma, support)
+                MAvg, OTT = calculate_ott(closes, OTT_PERIOD, OTT_PERCENT)
+                signal, idx = get_signal(MAvg, OTT)
                 price = closes[-1]
+
+                print(f"[{now}] {symbol}: {price:.6f} | Signal: {signal}")
 
                 if signal:
                     sig_ts = timestamps[idx] if idx else None
@@ -124,10 +178,10 @@ def main():
                         msg = (
                             f"{emoji} <b>СИГНАЛ: {action}</b>\n\n"
                             f"📊 Пара: {pair}\n"
-                            f"💰 Цена: <b>{price:.4f}$</b>\n"
+                            f"💰 Цена: <b>{price:.6f}$</b>\n"
                             f"🕯 Свеча: {ctime}\n"
                             f"⏰ Сейчас: {now}\n"
-                            f"📈 OTT: MA {arrow} Support\n\n"
+                            f"📈 OTT: MA {arrow} OTT\n\n"
                             f"⚠️ Не забудь стоп-лосс!"
                         )
                         send_telegram(msg)
