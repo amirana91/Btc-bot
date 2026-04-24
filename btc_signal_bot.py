@@ -15,6 +15,15 @@ SYMBOLS = [
     "RUNEUSDT",
     "XRPUSDT",
     "LTCUSDT",
+    "SOLUSDT",
+    "BNBUSDT",
+    "ETHUSDT",
+    "DOGEUSDT",
+    "PEPEUSDT",
+    "WIFUSDT",
+    "AVAXUSDT",
+    "LINKUSDT",
+    "DOTUSDT",
 ]
 
 def send_telegram(message):
@@ -50,7 +59,6 @@ def get_candles(symbol):
         return None, None
 
 def wwma(src, length):
-    """Точная формула WWMA из Pine Script"""
     wwalpha = 1.0 / length
     WWMA = [0.0] * len(src)
     WWMA[0] = src[0]
@@ -59,32 +67,22 @@ def wwma(src, length):
     return WWMA
 
 def calculate_ott(closes, length, percent):
-    """
-    Точная реализация OTT индикатора по исходному Pine Script коду
-    Сигнал: crossover/crossunder MAvg и OTT[2]
-    """
     n = len(closes)
-    
-    # WWMA (Moving Average)
     MAvg = wwma(closes, length)
-    
     fark = [MAvg[i] * percent * 0.01 for i in range(n)]
-    
-    # longStop
+
     longStop = [MAvg[i] - fark[i] for i in range(n)]
     for i in range(1, n):
         longStopPrev = longStop[i-1]
         if MAvg[i] > longStopPrev:
             longStop[i] = max(longStop[i], longStopPrev)
-    
-    # shortStop
+
     shortStop = [MAvg[i] + fark[i] for i in range(n)]
     for i in range(1, n):
         shortStopPrev = shortStop[i-1]
         if MAvg[i] < shortStopPrev:
             shortStop[i] = min(shortStop[i], shortStopPrev)
-    
-    # dir
+
     dir_ = [1] * n
     for i in range(1, n):
         prev_dir = dir_[i-1]
@@ -94,55 +92,41 @@ def calculate_ott(closes, length, percent):
             dir_[i] = -1
         else:
             dir_[i] = prev_dir
-    
-    # MT
+
     MT = [longStop[i] if dir_[i] == 1 else shortStop[i] for i in range(n)]
-    
-    # OTT
+
     OTT = []
     for i in range(n):
         if MAvg[i] > MT[i]:
             OTT.append(MT[i] * (200 + percent) / 200)
         else:
             OTT.append(MT[i] * (200 - percent) / 200)
-    
+
     return MAvg, OTT
 
 def get_signal(MAvg, OTT):
-    """
-    Сигнал точно как в Pine Script:
-    buySignalk = crossover(MAvg, OTT[2])  -> MAvg пересекает OTT снизу вверх (2 бара назад)
-    sellSignallk = crossunder(MAvg, OTT[2]) -> MAvg пересекает OTT сверху вниз (2 бара назад)
-    """
     n = len(MAvg)
-    
-    # Проверяем последние 5 свечей
     for i in range(n - 2, n - 7, -1):
         if i < 3:
             break
-        
-        # OTT[2] означает OTT со сдвигом 2 бара назад
         ott2_curr = OTT[i - 2]
         ott2_prev = OTT[i - 3]
         mavg_curr = MAvg[i]
         mavg_prev = MAvg[i - 1]
-        
-        # crossover: предыдущий MAvg <= OTT[2], текущий MAvg > OTT[2]
         if mavg_prev <= ott2_prev and mavg_curr > ott2_curr:
             return "BUY", i
-        
-        # crossunder: предыдущий MAvg >= OTT[2], текущий MAvg < OTT[2]
         if mavg_prev >= ott2_prev and mavg_curr < ott2_curr:
             return "SELL", i
-    
     return None, None
 
 def main():
     print("Bot started!")
     send_telegram(
         "🤖 <b>Бот запущен!</b>\n\n"
-        "Мониторинг пар:\n"
-        "• BTC/USDT\n• ZIL/USDT\n• GMT/USDT\n• RUNE/USDT\n• XRP/USDT\n• LTC/USDT\n\n"
+        "Мониторинг 15 пар:\n"
+        "BTC • ZIL • GMT • RUNE • XRP • LTC\n"
+        "SOL • BNB • ETH • DOGE • PEPE\n"
+        "WIF • AVAX • LINK • DOT\n\n"
         "Таймфрейм: 1H | OTT (7, 1.4, WWMA)\n\nЖду сигналов... 👀"
     )
 
