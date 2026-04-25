@@ -26,6 +26,11 @@ SYMBOLS = [
     "DOTUSDT",
 ]
 
+TIMEFRAMES = [
+    {"interval": "30", "label": "30 минут", "key": "30m"},
+    {"interval": "60", "label": "1 час",    "key": "1h"},
+]
+
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     data = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
@@ -34,12 +39,12 @@ def send_telegram(message):
     except Exception as e:
         print(f"Ошибка отправки: {e}")
 
-def get_candles(symbol):
+def get_candles(symbol, interval):
     url = "https://api.bybit.com/v5/market/kline"
     params = {
         "category": "linear",
         "symbol": symbol,
-        "interval": "60",
+        "interval": interval,
         "limit": 150
     }
     try:
@@ -49,13 +54,12 @@ def get_candles(symbol):
             candles = list(reversed(data["result"]["list"]))
             closes = [float(c[4]) for c in candles]
             timestamps = [int(c[0]) for c in candles]
-            print(f"OK {symbol}: {closes[-1]:.6f}")
             return closes, timestamps
         else:
-            print(f"Bybit error {symbol}: {data}")
+            print(f"Bybit error {symbol} {interval}: {data}")
             return None, None
     except Exception as e:
-        print(f"Error {symbol}: {e}")
+        print(f"Error {symbol} {interval}: {e}")
         return None, None
 
 def wwma(src, length):
@@ -127,54 +131,74 @@ def main():
         "BTC • ZIL • GMT • RUNE • XRP • LTC\n"
         "SOL • BNB • ETH • DOGE • PEPE\n"
         "WIF • AVAX • LINK • DOT\n\n"
-        "Таймфрейм: 1H | OTT (7, 1.4, WWMA)\n\nЖду сигналов... 👀"
+        "Таймфреймы: <b>30 минут</b> и <b>1 час</b>\n"
+        "Индикатор: OTT (7, 1.4, WWMA)\n\nЖду сигналов... 👀"
     )
 
-    last_signals = {s: (None, None) for s in SYMBOLS}
+    # Храним сигналы для каждой пары и каждого таймфрейма
+    last_signals = {
+        f"{s}_{tf['key']}": (None, None)
+        for s in SYMBOLS
+        for tf in TIMEFRAMES
+    }
     first_run = True
 
     while True:
         now = datetime.now().strftime("%H:%M %d.%m.%Y")
-        for symbol in SYMBOLS:
-            try:
-                closes, timestamps = get_candles(symbol)
-                if not closes:
-                    continue
 
-                MAvg, OTT = calculate_ott(closes, OTT_PERIOD, OTT_PERCENT)
-                signal, idx = get_signal(MAvg, OTT)
-                price = closes[-1]
+        for tf in TIMEFRAMES:
+            for symbol in SYMBOLS:
+                try:
+                    closes, timestamps = get_candles(symbol, tf["interval"])
+                    if not closes:
+                        continue
 
-                print(f"[{now}] {symbol}: {price:.6f} | Signal: {signal}")
+                    MAvg, OTT = calculate_ott(closes, OTT_PERIOD, OTT_PERCENT)
+                    signal, idx = get_signal(MAvg, OTT)
+                    price = closes[-1]
 
-                if signal:
-                    sig_ts = timestamps[idx] if idx else None
-                    last_sig, last_ts = last_signals[symbol]
-                    send_it = (last_sig != signal) or (last_ts != sig_ts) or (first_run and last_sig is None)
+                    key = f"{symbol}_{tf['key']}"
+                    print(f"[{now}] {symbol} {tf['key']}: {price:.6f} | {signal}")
 
-                    if send_it:
-                        pair = symbol.replace("USDT", "/USDT")
-                        ctime = datetime.fromtimestamp(sig_ts/1000).strftime("%H:%M %d.%m") if sig_ts else "—"
-                        emoji = "🟢" if signal == "BUY" else "🔴"
-                        action = "LONG (BUY)" if signal == "BUY" else "SHORT (SELL)"
-                        arrow = "↑" if signal == "BUY" else "↓"
+                    if signal:
+                        sig_ts = timestamps[idx] if idx else None
+                        last_sig, last_ts = last_signals[key]
+                        send_it = (last_sig != signal) or (last_ts != sig_ts) or (first_run and last_sig is None)
 
-                        msg = (
-                            f"{emoji} <b>СИГНАЛ: {action}</b>\n\n"
-                            f"📊 Пара: {pair}\n"
-                            f"💰 Цена: <b>{price:.6f}$</b>\n"
-                            f"🕯 Свеча: {ctime}\n"
-                            f"⏰ Сейчас: {now}\n"
-                            f"📈 OTT: MA {arrow} OTT\n\n"
-                            f"⚠️ Не забудь стоп-лосс!"
-                        )
-                        send_telegram(msg)
-                        last_signals[symbol] = (signal, sig_ts)
-                        print(f"Signal sent: {symbol} {signal}")
+                        if send_it:
+                            pair = symbol.replace("USDT", "/USDT")
+                            ctime = datetime.fromtimestamp(sig_ts/1000).strftime("%H:%M %d.%m") if sig_ts else "—"
+                            emoji = "🟢" if signal == "BUY" else "🔴"
+                            action = "LONG (BUY)" if signal == "BUY" else "SHORT (SELL)"
+                            arrow = "↑" if signal == "BUY" else "↓"
+                            tf_emoji = "⏱" if tf["key"] == "30m" else "🕐"
 
-                time.sleep(2)
-            except Exception as e:
-                print(f"Error {symbol}: {e}")
+                            # Стоп-лосс 2% и тейк-профит 4%
+                            if signal == "BUY":
+                                stop_loss = price * 0.98
+                                take_profit = price * 1.04
+                            else:
+                                stop_loss = price * 1.02
+                                take_profit = price * 0.96
+
+                            msg = (
+                                f"{emoji} <b>СИГНАЛ: {action}</b>\n"
+                                f"{tf_emoji} Таймфрейм: <b>{tf['label']}</b>\n\n"
+                                f"📊 Пара: {pair}\n"
+                                f"💰 Цена входа: <b>{price:.6f}$</b>\n"
+                                f"🛑 Стоп-лосс: <b>{stop_loss:.6f}$</b> (-2%)\n"
+                                f"🎯 Тейк-профит: <b>{take_profit:.6f}$</b> (+4%)\n"
+                                f"🕯 Свеча: {ctime}\n"
+                                f"⏰ Сейчас: {now}\n"
+                                f"📈 OTT: MA {arrow} OTT\n"
+                            )
+                            send_telegram(msg)
+                            last_signals[key] = (signal, sig_ts)
+                            print(f"Signal sent: {symbol} {tf['key']} {signal}")
+
+                    time.sleep(1)
+                except Exception as e:
+                    print(f"Error {symbol} {tf['key']}: {e}")
 
         first_run = False
         time.sleep(CHECK_INTERVAL)
