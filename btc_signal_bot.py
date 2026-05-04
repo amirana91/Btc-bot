@@ -27,8 +27,9 @@ SYMBOLS = [
 ]
 
 TIMEFRAMES = [
-    {"interval": "30", "label": "30 минут", "key": "30m"},
-    {"interval": "60", "label": "1 час",    "key": "1h"},
+    {"interval": "30",  "label": "30 минут", "key": "30m",  "emoji": "⏱"},
+    {"interval": "60",  "label": "1 час",    "key": "1h",   "emoji": "🕐"},
+    {"interval": "120", "label": "2 часа",   "key": "2h",   "emoji": "🕑"},
 ]
 
 def send_telegram(message):
@@ -77,15 +78,13 @@ def calculate_ott(closes, length, percent):
 
     longStop = [MAvg[i] - fark[i] for i in range(n)]
     for i in range(1, n):
-        longStopPrev = longStop[i-1]
-        if MAvg[i] > longStopPrev:
-            longStop[i] = max(longStop[i], longStopPrev)
+        if MAvg[i] > longStop[i-1]:
+            longStop[i] = max(longStop[i], longStop[i-1])
 
     shortStop = [MAvg[i] + fark[i] for i in range(n)]
     for i in range(1, n):
-        shortStopPrev = shortStop[i-1]
-        if MAvg[i] < shortStopPrev:
-            shortStop[i] = min(shortStop[i], shortStopPrev)
+        if MAvg[i] < shortStop[i-1]:
+            shortStop[i] = min(shortStop[i], shortStop[i-1])
 
     dir_ = [1] * n
     for i in range(1, n):
@@ -131,11 +130,10 @@ def main():
         "BTC • ZIL • GMT • RUNE • XRP • LTC\n"
         "SOL • BNB • ETH • DOGE • PEPE\n"
         "WIF • AVAX • LINK • DOT\n\n"
-        "Таймфреймы: <b>30 минут</b> и <b>1 час</b>\n"
+        "Таймфреймы: <b>30м • 1ч • 2ч</b>\n"
         "Индикатор: OTT (7, 1.4, WWMA)\n\nЖду сигналов... 👀"
     )
 
-    # Храним сигналы для каждой пары и каждого таймфрейма
     last_signals = {
         f"{s}_{tf['key']}": (None, None)
         for s in SYMBOLS
@@ -171,23 +169,22 @@ def main():
                             emoji = "🟢" if signal == "BUY" else "🔴"
                             action = "LONG (BUY)" if signal == "BUY" else "SHORT (SELL)"
                             arrow = "↑" if signal == "BUY" else "↓"
-                            tf_emoji = "⏱" if tf["key"] == "30m" else "🕐"
 
-                            # Стоп-лосс 2% и тейк-профит 4%
+                            # x20 плечо: TP +0.5% цены = +10% депозит, SL -1% цены = -20% депозит
                             if signal == "BUY":
-                                stop_loss = price * 0.98
-                                take_profit = price * 1.04
+                                stop_loss = price * 0.99
+                                take_profit = price * 1.005
                             else:
-                                stop_loss = price * 1.02
-                                take_profit = price * 0.96
+                                stop_loss = price * 1.01
+                                take_profit = price * 0.995
 
                             msg = (
                                 f"{emoji} <b>СИГНАЛ: {action}</b>\n"
-                                f"{tf_emoji} Таймфрейм: <b>{tf['label']}</b>\n\n"
+                                f"{tf['emoji']} Таймфрейм: <b>{tf['label']}</b>\n\n"
                                 f"📊 Пара: {pair}\n"
                                 f"💰 Цена входа: <b>{price:.6f}$</b>\n"
-                                f"🛑 Стоп-лосс: <b>{stop_loss:.6f}$</b> (-2%)\n"
-                                f"🎯 Тейк-профит: <b>{take_profit:.6f}$</b> (+4%)\n"
+                                f"🛑 Стоп-лосс: <b>{stop_loss:.6f}$</b> (x20 = -20% депозит)\n"
+                                f"🎯 Тейк-профит: <b>{take_profit:.6f}$</b> (x20 = +10% депозит)\n"
                                 f"🕯 Свеча: {ctime}\n"
                                 f"⏰ Сейчас: {now}\n"
                                 f"📈 OTT: MA {arrow} OTT\n"
